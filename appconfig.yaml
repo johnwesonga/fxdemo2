@@ -1,0 +1,4 @@
+dbConfig:
+  postgresconn: "postgres://postgres@localhost:5432/players"
+server:
+  port: 8080

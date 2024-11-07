@@ -4,6 +4,7 @@ import (
 	"context"
 	"example/fxdemo2/models"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 )
@@ -24,4 +25,14 @@ func (s *PostGresService) GetPlayer(id int) (*models.Player, error) {
 	}
 	s.logger.Info("Fetched player")
 	return &player, nil
+}
+
+func (s *PostGresService) GetAllPlayers() ([]models.Player, error) {
+	query := "SELECT id, name, score, created_at, updated_at FROM players"
+	rows, err := s.db.Query(context.Background(), query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return pgx.CollectRows(rows, pgx.RowToStructByName[models.Player])
 }

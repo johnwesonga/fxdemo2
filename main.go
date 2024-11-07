@@ -2,43 +2,68 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"example/fxdemo2/db"
 	"example/fxdemo2/models"
+	"fmt"
 	"log"
 	"net/http"
+	"os"
 
 	"github.com/gorilla/mux"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/fx"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	"gopkg.in/yaml.v3"
 )
+
+const configFile = "appconfig.yaml"
 
 type PlayerService interface {
 	//CreatePlayer(player models.Player) error
 	GetPlayer(id int) (*models.Player, error)
-	//GetAllPlayers() (players []models.Player, err error)
+	GetAllPlayers() (players []models.Player, err error)
 	//UpdatePlayer(player Player) error
 	//DeletePlayer(id int) error
+}
+
+type AppConfig struct {
+	DbConfig DbConfig `yaml:"dbConfig"`
+	Server   Server   `yaml:"server"`
+}
+
+type DbConfig struct {
+	PostgresConn string `yaml:"postgresconn"`
+}
+
+type Server struct {
+	Port int `yaml:"port"`
 }
 
 type MyService struct {
 	mux           *mux.Router
 	logger        *zap.Logger
 	playerService PlayerService
+	appConfig     *AppConfig
 }
 
-func NewMyService(mux *mux.Router, logger *zap.Logger, playersvc PlayerService) *MyService {
-	return &MyService{mux: mux, logger: logger, playerService: playersvc}
+func NewMyService(mux *mux.Router, logger *zap.Logger, playersvc PlayerService, appConfig *AppConfig) *MyService {
+	return &MyService{mux: mux, logger: logger, playerService: playersvc, appConfig: appConfig}
 }
 
 func newPlayerService(db *db.PostGresService) PlayerService {
 	return db
 }
 
+func newAppConfig() *AppConfig {
+	return &AppConfig{}
+}
+
 // newMuxRouter creates a new instance of a mux.Router, which is a HTTP request multiplexer.
 // This function is used to provide a mux.Router dependency to the MyService struct.
-func newMuxRouter() *mux.Router {
+func newMuxRouter(logger *zap.Logger) *mux.Router {
+	logger.Info("Starting Router Instance")
 	router := mux.NewRouter()
 	return router
 }
@@ -58,7 +83,7 @@ func newZapLogger() *zap.Logger {
 }
 
 func (s *MyService) IndexHandler(w http.ResponseWriter, r *http.Request) {
-	s.logger.Info("Index handler called")
+	s.logger.Info("Index handler called!")
 	p, err := s.playerService.GetPlayer(1)
 	if err != nil {
 		s.logger.Error("Error getting player", zap.Error(err))
@@ -66,15 +91,40 @@ func (s *MyService) IndexHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.logger.Sugar().Infof("player %v", p.Name)
-	w.Write([]byte("Hello from FxDemo2 Server!"))
+	fmt.Fprint(w, "Player: ", p.Name)
+}
+
+func (s *MyService) GetAllPlayersHandler(w http.ResponseWriter, r *http.Request) {
+	s.logger.Info("Get All Players Handler")
+	players, err := s.playerService.GetAllPlayers()
+	if err != nil {
+		s.logger.Error("Error getting players", zap.Error(err))
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	data, err := json.Marshal(players)
+	if err != nil {
+		s.logger.Error("Error marshalling players to JSON", zap.Error(err))
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	// write players data to response body
+	_, err = w.Write(data)
+	if err != nil {
+		s.logger.Error("Error writing response", zap.Error(err))
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
 }
 
 // Start starts the HTTP server for the MyService. It listens on port 3333 and serves requests
 // using the mux.Router provided to the MyService. If there is an error starting the server,
 // it is returned.
 func (s *MyService) Start() error {
-	PORT := ":3333"
-	s.logger.Sugar().Infof("Starting FXdemo2 server on port %s", PORT)
+	port := s.appConfig.parseAppConfig().Server.Port
+	PORT := fmt.Sprintf(":%v", port)
+	s.logger.Sugar().Infof("Starting FXdemo2 server on port %v", PORT)
 	err := http.ListenAndServe(PORT, s.mux)
 	if err != nil {
 		return err
@@ -91,6 +141,7 @@ func (s *MyService) LoadHandlers() {
 		w.WriteHeader(http.StatusOK)
 	})
 	s.mux.HandleFunc("/", s.IndexHandler)
+	s.mux.HandleFunc("/players", s.GetAllPlayersHandler)
 }
 
 // runService is a function that sets up the HTTP server for the MyService. It registers the
@@ -101,6 +152,7 @@ func (s *MyService) LoadHandlers() {
 // stops the HTTP server.
 func runService(lifecyle fx.Lifecycle, s *MyService) {
 
+	//port := s.serverConfig.parseServerConfig().Server.Port
 	lifecyle.Append(
 		fx.Hook{
 			OnStart: func(context.Context) error {
@@ -133,18 +185,34 @@ func main() {
 			newPostGresClient,
 			db.NewPostGresService,
 			newPlayerService,
+			newAppConfig,
 		),
 		fx.Invoke(runService),
 	)
 	app.Run()
 }
 
-func newPostGresClient() *pgxpool.Pool {
+func newPostGresClient(logger *zap.Logger, appConfig *AppConfig) *pgxpool.Pool {
 	// TODO: implement Postgres client initialization using existing postgres driver
-	connString := "postgres://postgres@localhost:5432/players"
+	logger.Info("Starting Postgres Client")
+	connString := appConfig.parseAppConfig().DbConfig.PostgresConn
 	pool, err := pgxpool.New(context.Background(), connString)
 	if err != nil {
 		log.Fatal(err)
 	}
 	return pool
+}
+func (appCfg *AppConfig) parseAppConfig() AppConfig {
+	var appConfig AppConfig
+	yamlFile, err := os.ReadFile(configFile)
+	if err != nil {
+		panic(err)
+	}
+	err = yaml.Unmarshal(yamlFile, &appConfig)
+	if err != nil {
+		panic(err)
+	}
+	log.Printf("appConfigs: %v", appConfig.Server)
+	return appConfig
+
 }
