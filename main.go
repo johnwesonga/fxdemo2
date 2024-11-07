@@ -193,7 +193,6 @@ func main() {
 }
 
 func newPostGresClient(logger *zap.Logger, appConfig *AppConfig) *pgxpool.Pool {
-	// TODO: implement Postgres client initialization using existing postgres driver
 	logger.Info("Starting Postgres Client")
 	connString := appConfig.parseAppConfig().DbConfig.PostgresConn
 	pool, err := pgxpool.New(context.Background(), connString)
